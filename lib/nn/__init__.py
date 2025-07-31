@@ -12,12 +12,3 @@ from .utils import *
 from .optimizers import Optimizer
 from .heads import *
 from .pooling import *
-
-from . import utils
-from . import optimizers
-from . import functional
-from . import internal
-from . import transform
-from . import derivatives
-from . import distributions
-from . import pooling
