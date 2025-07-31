@@ -15,15 +15,6 @@ from PIL import ImageFilter
 
 class ImageProcessorMixin:
 
-  # def load(self, file_path: str | pathlib.Path) -> np.ndarray:
-  #   img = cv2.imread(file_path)
-  #   # img = cv2.resize(img, self.img_size)
-  #   if np.asarray(img).ndim == 2:
-  #     img = cv2.cvtColor(img, cv2.COLOR_GRAY2RGB)
-  #   else:
-  #     img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-  #   return img
-
   """A mixin providing image processing and preprocessing functionalities."""
 
   def load_image(self, file_path):
