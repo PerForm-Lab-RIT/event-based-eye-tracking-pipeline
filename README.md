@@ -9,12 +9,20 @@ A library for running and evaluating different event-based eye tracking algorith
 ├── data/                # Directory for datasets
 ├── docs/                # Documentation files
 ├── eet/                 # Main package
-│ ├── common/            # Common utilities and functions
-│ ├── data/              # Data handling modules
-│ ├── models/            # Eye tracking algorithm models
-│ ├── nn/                # Neural network implementations
+│ ├── agents/            # Eye tracking algorithm implementations
+│ ├── envs/              # Environment and data handling modules
+│ ├── modeling/          # Neural network model components
+│ ├── utils/             # Utility functions
 │ ├── configs.yaml       # Configuration file
 │ └── __init__.py        # Package initialization
+├── lib/                 # Core library components
+│ ├── agent/             # Agent base classes
+│ ├── common/            # Common utilities and functions
+│ ├── cv/                # Computer vision utilities
+│ ├── envs/              # Environment base classes
+│ ├── nn/                # Neural network implementations
+│ ├── replay/            # Replay buffer implementations
+│ └── utils/             # Utility functions
 └── scripts/             # Utility scripts
     ├── eval.py          # Evaluation script
     └── train.py         # Training script
