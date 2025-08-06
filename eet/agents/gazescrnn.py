@@ -4,10 +4,11 @@ GazeSCRNN: Event-Based Gaze Tracking with Spiking Neural Networks
 This module implements a Spiking Convolutional Recurrent Neural Network (SCRNN)
 for event-based gaze tracking, achieving 9.59° angle error on the EVEye dataset.
 
-Author: PerForm Lab Research Team
+Author: Mobina Ghorbaninejad
 Lab: PerForm Lab, RIT  
 Date: August 2025
 Performance: 9.59° angle error, 2.68mm distance error
+Ref. :GazeSCRNN, 2025
 """
 
 import numpy as np
