@@ -538,7 +538,7 @@ class GazeSCRNNAgent:
         """Load pre-trained model weights."""
         checkpoint = torch.load(checkpoint_path, map_location=self.device)
         self.model.load_state_dict(checkpoint['state_dict'])
-        print(f"✅ Loaded checkpoint: {checkpoint_path}")
+        print(f"Loaded checkpoint: {checkpoint_path}")
     
     def predict(self, event_data: torch.Tensor) -> Dict[str, torch.Tensor]:
         """
@@ -588,7 +588,7 @@ __all__ = [
 
 if __name__ == "__main__":
     # Example usage
-    print("🚀 GazeSCRNN Agent - Event-Based Gaze Tracking")
+    print(" GazeSCRNN Agent - Event-Based Gaze Tracking")
     print("Best Performance: 9.59° angle error on EVEye dataset")
     
     # Initialize agent
