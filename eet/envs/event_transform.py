@@ -161,7 +161,7 @@ class Histogram(EventTransform):
     img = np.full((self.height, self.width, 2), 0, dtype=np.float32)
     x, y = resize_positions(events['x'], events['y'], original_width, original_height, self.width, self.height)
     for i, event in enumerate(events):
-      img[y[i], x[i], event["p"]] += 1
+      img[y[i], x[i], event["p"]] += 1.0
     return img
 
 
@@ -181,7 +181,6 @@ class EventFrame(EventTransform):
     x, y = resize_positions(events['x'], events['y'], original_width, original_height, self.width, self.height)
     img[y, x, 0] = events['p']
     return img
-
 
 
 def build_event_transform(eventrepr: str, *args, **kwargs):

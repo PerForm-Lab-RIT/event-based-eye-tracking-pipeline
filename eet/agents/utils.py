@@ -1,4 +1,5 @@
 
+from typing import Dict
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -16,11 +17,37 @@ CROSS_HAIR_THICKNESS = 2
 CROSS_HAIR_LENGTH = 5
 
 ispupilcentroid = lambda s: np.issubdtype(s.dtype, np.integer) and s.shape == (2,)
-# normpupilcentroid = lambda x, h: x / h * 2 - 1
-# unnormpupilcentroid = lambda x, h: (x + 1) / 2 * h
-normpupilcentroid = lambda x, h: x - h / 2.0 # maybe we subtract half of it but not divide
-unnormpupilcentroid = lambda x, h: x + h / 2.0
+normpupilcentroid = lambda x, h: x * 2.0 / h - 1.0 # Normalize to [-1, 1] range
+unnormpupilcentroid = lambda x, h: (x + 1.0) / 2.0 * h # from [-1, 1] to [0, h]
+# The following two lines are buggy, don't know why
+# normpupilcentroid = lambda x, h: x - h / 2.0 # maybe we subtract half of it but not divide
+# unnormpupilcentroid = lambda x, h: x + h / 2.0
 isimage = lambda s: len(s.shape) == 3
+
+# def normalize_frame(frame: jax.Array, bdims: int = 1):
+#   # normalize by mean and std
+#   axes = tuple(range(bdims, frame.ndim))
+#   mean = jnp.mean(frame, axis=axes, keepdims=True)
+#   std = jnp.std(frame, axis=axes, keepdims=True)
+#   # Avoid division by zero
+#   std = jnp.where(std == 0, jnp.ones_like(std), std)
+#   return (frame - mean) / std
+
+def normalize_frame(frame: jax.Array, bdims: int = 1):
+  # simply minus 0.5
+  # Assuming frame is in 0-1 range, eventframe transformed data
+  # return frame - 0.5
+  return frame
+
+def preprocess_data(data: Dict[str, jax.Array]) -> Dict[str, jax.Array]:
+  results = {}
+  bdims = len(data['is_first'].shape) # (B,) or (B, T)
+  for k, v in data.items():
+    if k =='frame':
+      results[k] = normalize_frame(v, bdims=bdims)  # Normalize event frames
+    else:
+      results[k] = v
+  return results
 
 def draw_dot(image: jax.Array, cy: jax.Array, cx: jax.Array, r: int, color: tuple = (0, 0, 0)):
   """_summary_
@@ -200,6 +227,3 @@ def draw_cross_hair_with_dot(
 
   # Draw cross hair with dot
   return jnp.where(combined_mask, color, image)
-
-
-

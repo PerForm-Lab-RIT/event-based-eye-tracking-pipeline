@@ -21,6 +21,7 @@ from lib.envs.base import InactiveEnv
 
 from .event_transform import EventTransform, EVENT_DTYPE, build_event_transform
 
+# Generally, EV-Eye dataset only have inference for every 
 DEFAULT_TIMEBIN = 40000 # default using micro second unit, 40 ms
 DEFAULT_WIDTH = 346
 DEFAULT_HEIGHT = 260

@@ -6,6 +6,10 @@ Date: 2025-05-31
 Description: develop CNN agent
 """
 
+# import sys, pathlib
+# sys.path.append(str(pathlib.Path(__file__).parent.parent.parent))
+# sys.path.append(str(pathlib.Path(__file__).parent.parent.parent.parent.parent))
+
 from typing import Dict, List, Tuple
 import jax
 import jax.numpy as jnp
@@ -33,7 +37,7 @@ class CNNGRUAgent(JAXAgent):
     self.dynamics = nn.GRU(**config.dynamics.gru, name='dyn')
     _label_space = {k: Space(np.float32, v.shape, v.low, v.high) if ispupilcentroid(v) else v for k, v in label_space.items()}
     # print(f"[CNNAgent.__init__] _label_space: {_label_space}", color='green')
-    self.head = nn.MLPHead(_label_space, {k: 'symlog_mse' for k in label_space}, **config.head.general, name='head')
+    self.head = nn.MLPHead(_label_space, {k: 'identity' for k in label_space}, **config.head.general, name='head')
     modules = [self.encoder, self.dynamics, self.head]
     self.opt = nn.Optimizer(modules, **config.opt, name="opt")
 
@@ -68,7 +72,7 @@ class CNNGRUAgent(JAXAgent):
     return (self.dynamics.initial(batch_size),)
 
   def infer(self, carry, obs, mode="train"):
-
+    obs = preprocess_data(obs)
     (dyn_carry,) = carry
     kw = dict(training=False, single=True)
     reset = obs['is_first']
@@ -79,7 +83,7 @@ class CNNGRUAgent(JAXAgent):
     # print(f"[CNNGRU.infer] feat.shape: {feat}")
     dyn_carry, feat = self.dynamics(nn.cast(dyn_carry), feat, reset, single=True) # (B, dim)
     dist = self.head(feat, bdims=1) # (B, dim)
-    result = {k: v.pred() for k, v in dist.items()}
+    result = {k: jax.nn.tanh(v.pred()) for k, v in dist.items()}
 
     carry = (dyn_carry,)
     out = {}
@@ -89,6 +93,7 @@ class CNNGRUAgent(JAXAgent):
 
   def _loss(self, carry, data, training=True):
     metrics = {}
+    data = preprocess_data(data)
     reset = data['is_first']
     label_mask = data['label_mask'] # if the label is valid (B, T)
     (dyn_carry,) = carry
@@ -101,8 +106,10 @@ class CNNGRUAgent(JAXAgent):
     for key, dist in dists.items():
       space, value = self.label_space[key], data[key]
       assert value.dtype == space.dtype, (key, space, value.dtype)
-      target = normpupilcentroid(nn.f32(value), space.high + 1) if ispupilcentroid(space) else value
-      losses[key] = F.mask(dist.loss(nn.sg(target)), label_mask) # (B, T) x (B, T)
+      target = normpupilcentroid(nn.f32(value), space.high + 1) if (ispupilcentroid(space) or key == 'pupil') else value
+      prediction = jax.nn.tanh(dist.pred())
+      _loss = ((prediction - nn.sg(target))**2).sum(-1) # (B, T) # MSE Loss
+      losses[key] = F.mask(_loss, label_mask) # (B, T) x (B, T)
     # Assert shape
     B, T = reset.shape
     shapes = {k: v.shape for k, v in losses.items()}
@@ -111,7 +118,7 @@ class CNNGRUAgent(JAXAgent):
     # Compute accuracy metrics
     for k, dist in dists.items():
       if ispupilcentroid(self.label_space[k]):
-        pred = dist.pred()
+        pred = jax.nn.tanh(dist.pred())
         pred = unnormpupilcentroid(pred, self.label_space[k].high + 1)
         label = nn.f32(data[k])
         distance = jnp.linalg.norm(pred - label, axis=-1) # (B, T)
@@ -125,13 +132,14 @@ class CNNGRUAgent(JAXAgent):
 
     # Final loss
     metrics.update({f'loss/{k}': v.mean() for k, v in losses.items()})
-    # assert set(losses.keys()) == set(self.scales.keys()), (
-    #     sorted(losses.keys()), sorted(self.scales.keys()))
-    # final_loss = sum([v.mean() * self.scales[k] for k, v in losses.items()])
-    final_loss = sum([(v.sum(-1) / nn.f32(label_mask).sum(-1)).mean() for k, v in losses.items()])
+    for k, v in losses.items():
+      assert v.shape == (B, T), (k, v.shape, (B, T))
+    final_loss = sum([v for k, v in losses.items()]) # (B, T)
+    sum_label_mask = nn.f32(label_mask).sum()
+    final_loss = jnp.where(sum_label_mask > 0, final_loss.sum() / sum_label_mask, 0.0) # average over valid labels
 
     # metrics.update(self._metrics(data, logits))
-    outs = {'preds': {k: v.pred() for k, v in dists.items()}}
+    outs = {'preds': {k: jax.nn.tanh(v.pred()) for k, v in dists.items()}}
     carry = (dyn_carry,)
     entries = (seq_carry,)
     return final_loss, (outs, carry, entries, metrics)
@@ -176,7 +184,9 @@ class CNNGRUAgent(JAXAgent):
         true = nn.f32(data[key][:RB, ..., :1])
         true = jnp.repeat(true, 3, axis=-1) # grayscale to rgb
         # min max normalization, and take only the first channel
-        norm = (true - true.min()) / (true.max() - true.min())
+        true_min = true.min(axis=[2, 3], keepdims=True) # (RB, T, 1, 1, C)
+        true_max = true.max(axis=[2, 3], keepdims=True) # (RB, T, 1, 1, C)
+        norm = (true - true_min) / (true_max - true_min).clip(1e-8)
         norm = (norm * 255).clip(0, 255).astype(jnp.uint8)
 
         # draw label cross

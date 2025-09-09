@@ -6,6 +6,10 @@ Date: 2025-07-11
 Description: develop Mamba agent
 """
 
+# import sys, pathlib
+# sys.path.append(str(pathlib.Path(__file__).parent.parent.parent))
+# sys.path.append(str(pathlib.Path(__file__).parent.parent.parent.parent.parent))
+
 from typing import Dict, List, Tuple
 import jax
 import jax.numpy as jnp
@@ -36,7 +40,7 @@ class MambaPupilAgent(JAXAgent):
     self.dynamics2 = nn.MambaBlock(**config.dynamics.mamba, name='dyn2')
     _label_space = {k: Space(np.float32, v.shape, v.low, v.high) if ispupilcentroid(v) else v for k, v in label_space.items()}
     # print(f"[CNNAgent.__init__] _label_space: {_label_space}", color='green')
-    self.head = nn.MLPHead(_label_space, {k: 'symlog_mse' for k in label_space}, **config.head.general, name='head')
+    self.head = nn.MLPHead(_label_space, {k: 'identity' for k in label_space}, **config.head.general, name='head')
     modules = [self.encoder, self.dynamics1, self.dynamics2, self.head]
     self.opt = nn.Optimizer(modules, **config.opt, name="opt")
 
@@ -75,7 +79,7 @@ class MambaPupilAgent(JAXAgent):
     return ((self.dynamics1.initial(batch_size), self.dynamics2.initial(batch_size)),)
 
   def infer(self, carry, obs, mode="train"):
-
+    obs = preprocess_data(obs)
     ((dyn_carry1, dyn_carry2), prev_obs_seq) = carry
     kw = dict(training=False, single=False)
     # print(f"[CNNGRU.infer] reset.shape: {reset}")
@@ -91,7 +95,7 @@ class MambaPupilAgent(JAXAgent):
     dyn_carry1, seq_carry1 = self.dynamics1(nn.cast(dyn_carry1), feat, reset) # (B, T, dim)
     dyn_carry2, seq_carry2, seq_output = self.dynamics2(nn.cast(dyn_carry2), seq_carry1, reset, single=False) # (B, *state_dim), (B, *state_dim), (B, dim)
     dist = self.head(seq_output, bdims=2) # (B, dim)
-    result = {k: v.pred()[:, -1] for k, v in dist.items()}
+    result = {k: jax.nn.tanh(v.pred())[:, -1] for k, v in dist.items()}
 
     carry = ((dyn_carry1, dyn_carry2), main_obs)
     out = {}
@@ -101,6 +105,7 @@ class MambaPupilAgent(JAXAgent):
 
   def _loss(self, carry, data, training=True):
     metrics = {}
+    data = preprocess_data(data)
     reset = data['is_first']
     label_mask = data['label_mask'] # if the label is valid (B, T)
     ((dyn_carry1, dyn_carry2),) = carry
@@ -114,8 +119,10 @@ class MambaPupilAgent(JAXAgent):
     for key, dist in dists.items():
       space, value = self.label_space[key], data[key]
       assert value.dtype == space.dtype, (key, space, value.dtype)
-      target = normpupilcentroid(nn.f32(value), space.high + 1) if ispupilcentroid(space) else value
-      losses[key] = F.mask(dist.loss(nn.sg(target)), label_mask) # (B, T) x (B, T)
+      target = normpupilcentroid(nn.f32(value), space.high + 1) if (ispupilcentroid(space) or key == 'pupil') else value
+      prediction = jax.nn.tanh(dist.pred())
+      _loss = jnp.sqrt(((prediction - nn.sg(target))**2).sum(-1)) # (B, T) # MSE Loss (specified in the paper)
+      losses[key] = F.mask(_loss, label_mask) # (B, T) x (B, T)
     # Assert shape
     B, T = reset.shape
     shapes = {k: v.shape for k, v in losses.items()}
@@ -124,7 +131,7 @@ class MambaPupilAgent(JAXAgent):
     # Compute accuracy metrics
     for k, dist in dists.items():
       if ispupilcentroid(self.label_space[k]):
-        pred = dist.pred()
+        pred = jax.nn.tanh(dist.pred())
         pred = unnormpupilcentroid(pred, self.label_space[k].high + 1)
         label = nn.f32(data[k])
         distance = jnp.linalg.norm(pred - label, axis=-1) # (B, T)
@@ -138,13 +145,14 @@ class MambaPupilAgent(JAXAgent):
 
     # Final loss
     metrics.update({f'loss/{k}': v.mean() for k, v in losses.items()})
-    # assert set(losses.keys()) == set(self.scales.keys()), (
-    #     sorted(losses.keys()), sorted(self.scales.keys()))
-    # final_loss = sum([v.mean() * self.scales[k] for k, v in losses.items()])
-    final_loss = sum([(v.sum(-1) / nn.f32(label_mask).sum(-1)).mean() for k, v in losses.items()])
+    for k, v in losses.items():
+      assert v.shape == (B, T), (k, v.shape, (B, T))
+    final_loss = sum([v for k, v in losses.items()]) # (B, T)
+    sum_label_mask = nn.f32(label_mask).sum()
+    final_loss = jnp.where(sum_label_mask > 0, final_loss.sum() / sum_label_mask, 0.0) # average over valid labels
 
     # metrics.update(self._metrics(data, logits))
-    outs = {'preds': {k: v.pred() for k, v in dists.items()}}
+    outs = {'preds': {k: jax.nn.tanh(v.pred()) for k, v in dists.items()}}
     carry = ((dyn_carry1, dyn_carry2),)
     entries = ((seq_carry1, seq_carry2),)
     return final_loss, (outs, carry, entries, metrics)
@@ -189,7 +197,9 @@ class MambaPupilAgent(JAXAgent):
         true = nn.f32(data[key][:RB, ..., :1])
         true = jnp.repeat(true, 3, axis=-1) # grayscale to rgb
         # min max normalization, and take only the first channel
-        norm = (true - true.min()) / (true.max() - true.min())
+        true_min = true.min(axis=[2, 3], keepdims=True) # (RB, T, 1, 1, C)
+        true_max = true.max(axis=[2, 3], keepdims=True) # (RB, T, 1, 1, C)
+        norm = (true - true_min) / (true_max - true_min).clip(1e-8)
         norm = (norm * 255).clip(0, 255).astype(jnp.uint8)
 
         # draw label cross

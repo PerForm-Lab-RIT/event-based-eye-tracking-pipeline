@@ -2,7 +2,7 @@
 import math
 import jax
 import jax.numpy as jnp
-from typing import Dict
+from typing import Dict, Callable
 import numpy as np
 
 from lib.common import Space
