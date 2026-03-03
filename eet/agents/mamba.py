@@ -119,8 +119,8 @@ class MambaAgent(JAXAgent):
     # Compute accuracy metrics
     for k, dist in dists.items():
       if ispupilcentroid(self.label_space[k]):
-        pred = jax.nn.tanh(dist.pred())
-        pred = unnormpupilcentroid(pred, self.label_space[k].high + 1)
+        pred_normalized = jnp.clip(dist.pred(), -1, 1)
+        pred = unnormpupilcentroid(pred_normalized, self.label_space[k].high + 1)
         label = nn.f32(data[k])
         distance = jnp.linalg.norm(pred - label, axis=-1) # (B, T)
         # for some frame, the label might not be available, so we do this
@@ -130,6 +130,19 @@ class MambaAgent(JAXAgent):
         p20 = jnp.sum(F.mask(distance <= 20.0, label_mask)) / jnp.sum(label_mask) * 100
         p50 = jnp.sum(F.mask(distance <= 50.0, label_mask)) / jnp.sum(label_mask) * 100
         metrics.update({f'{k}/p5': p5, f'{k}/p10': p10, f'{k}/p15': p15, f'{k}/p20': p20, f'{k}/p50': p50})
+
+        # compute the metrics according to the original scale of the dataset, not the preprocessed one.
+        # In this case, we will use a fixed height and width of 320x320
+        unnorm2_pred = unnormpupilcentroid(pred_normalized, np.asarray([320, 320]))
+        unnorm_label = label / (self.label_space[k].high + 1) * np.asarray([320, 320])
+        distance2 = jnp.linalg.norm(unnorm2_pred - unnorm_label, axis=-1) # (B, T)
+        p5_true = jnp.mean(distance2 <= 5.0) * 100 # no label mask for now
+        p10_true = jnp.mean(distance2 <= 10.0) * 100
+        p15_true = jnp.mean(distance2 <= 15.0) * 100
+        p20_true = jnp.mean(distance2 <= 20.0) * 100
+        p50_true = jnp.mean(distance2 <= 50.0) * 100
+        metrics.update({f'{k}/p5_true': p5_true, f'{k}/p10_true': p10_true, f'{k}/p15_true': p15_true,
+                        f'{k}/p20_true': p20_true, f'{k}/p50_true': p50_true})
 
     # Final loss
     metrics.update({f'loss/{k}': v.mean() for k, v in losses.items()})

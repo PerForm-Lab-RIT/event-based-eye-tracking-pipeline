@@ -97,6 +97,62 @@ class CNNBidirectionalGRUAgent(JAXAgent):
       out.update(tree.flatdict(dict(dyn=dyn_carry)))
     return carry, result, out
 
+  def gflops(self, carry, obs):
+    # Estimate MACs for the infer forward path used in `infer`.
+    # infer does: feat = self.encoder(main_obs, main_obs['is_first'], training=False)
+    #            dyn_carry, feat = self.dynamics(nn.cast(dyn_carry), feat, main_obs['is_first'])
+    #            feat = feat[:, -1]
+    #            dist = self.head(feat, bdims=1)
+
+    total = 0
+    # When called from _loss, carry only contains (dyn_carry,)
+    # When called from infer, carry contains (dyn_carry, prev_obs_seq)
+    if len(carry) == 1:
+      (dyn_carry,) = carry
+      # Use obs directly as data (from _loss context)
+      data = obs
+    else:
+      (dyn_carry, prev_obs_seq) = carry
+      # Construct main_obs as done in infer
+      data = {k: jnp.concat([
+        prev_obs_seq[k][:, 1:],
+        obs[k][:, None]
+      ], axis=1) for k in self.obs_space if k not in self.label_space}
+
+    # Use encoder.macs where available
+    reset = data.get('is_first', None)
+    enc_m = self.encoder.macs(data, reset)
+    total += int(enc_m)
+
+    # Get sample feature by running encoder
+    B = int(data['is_first'].shape[0]) if 'is_first' in data else 1
+    T = int(data['is_first'].shape[1]) if 'is_first' in data and data['is_first'].ndim == 2 else 1
+    sample_feat = self.encoder(data, data['is_first'], training=False, single=False)
+
+    # Dynamics MACs
+    dyn_m = self.dynamics.macs(nn.cast(dyn_carry), sample_feat, reset)
+    total += int(dyn_m)
+
+    # Run dynamics to get final feature for head
+    _, feat = self.dynamics(nn.cast(dyn_carry), sample_feat, data['is_first'])
+    feat = feat[:, -1]  # (B, dim)
+
+    # Head MACs
+    head_m = self.head.macs(feat, bdims=1)
+    total += int(head_m)
+
+    # final tanh preds: negligible but count one op per output element
+    # estimate number of output scalars from head by checking label_space shapes
+    out_elems = 0
+    for k, space in self.label_space.items():
+      if hasattr(space, 'shape') and space.shape:
+        out_elems += int(np.prod(space.shape))
+      else:
+        out_elems += 1
+    total += int(B * out_elems * 4)  # approx 4 ops per tanh per example (no T here since we take [:, -1])
+
+    return macs2gflops(total)
+
   def _loss(self, carry, data, training=True):
     metrics = {}
     data = preprocess_data(data)
@@ -124,8 +180,8 @@ class CNNBidirectionalGRUAgent(JAXAgent):
     # Compute accuracy metrics
     for k, dist in dists.items():
       if ispupilcentroid(self.label_space[k]):
-        pred = jax.nn.tanh(dist.pred())
-        pred = unnormpupilcentroid(pred, self.label_space[k].high + 1)
+        pred_normalized = jnp.clip(dist.pred(), -1, 1)
+        pred = unnormpupilcentroid(pred_normalized, self.label_space[k].high + 1)
         label = nn.f32(data[k])
         distance = jnp.linalg.norm(pred - label, axis=-1) # (B, T)
         # for some frame, the label might not be available, so we do this
@@ -136,6 +192,19 @@ class CNNBidirectionalGRUAgent(JAXAgent):
         p50 = jnp.sum(F.mask(distance <= 50.0, label_mask)) / jnp.sum(label_mask) * 100
         metrics.update({f'{k}/p5': p5, f'{k}/p10': p10, f'{k}/p15': p15, f'{k}/p20': p20, f'{k}/p50': p50})
 
+        # compute the metrics according to the original scale of the dataset, not the preprocessed one.
+        # In this case, we will use a fixed height and width of 320x320
+        unnorm2_pred = unnormpupilcentroid(pred_normalized, np.asarray([320, 320]))
+        unnorm_label = label / (self.label_space[k].high + 1) * np.asarray([320, 320])
+        distance2 = jnp.linalg.norm(unnorm2_pred - unnorm_label, axis=-1) # (B, T)
+        p5_true = jnp.mean(distance2 <= 5.0) * 100 # no label mask for now
+        p10_true = jnp.mean(distance2 <= 10.0) * 100
+        p15_true = jnp.mean(distance2 <= 15.0) * 100
+        p20_true = jnp.mean(distance2 <= 20.0) * 100
+        p50_true = jnp.mean(distance2 <= 50.0) * 100
+        metrics.update({f'{k}/p5_true': p5_true, f'{k}/p10_true': p10_true, f'{k}/p15_true': p15_true,
+                        f'{k}/p20_true': p20_true, f'{k}/p50_true': p50_true})
+
     # Final loss
     metrics.update({f'loss/{k}': v.mean() for k, v in losses.items()})
     for k, v in losses.items():
@@ -143,6 +212,7 @@ class CNNBidirectionalGRUAgent(JAXAgent):
     final_loss = sum([v for k, v in losses.items()]) # (B, T)
     sum_label_mask = nn.f32(label_mask).sum()
     final_loss = jnp.where(sum_label_mask > 0, final_loss.sum() / sum_label_mask, 0.0) # average over valid labels
+    metrics['gflops'] = self.gflops(carry, data)
 
     # metrics.update(self._metrics(data, logits))
     outs = {'preds': {k: jax.nn.tanh(v.pred()) for k, v in dists.items()}}

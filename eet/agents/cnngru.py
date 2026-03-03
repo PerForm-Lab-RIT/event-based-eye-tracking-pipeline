@@ -66,7 +66,9 @@ class CNNGRUAgent(JAXAgent):
     return (self.dynamics.initial(batch_size),)
 
   def init_train(self, batch_size):
-    return (self.dynamics.initial(batch_size),)
+    a = (self.dynamics.initial(batch_size),) # (B, Z)
+    # print(f"[CNNGRU.init_train] init carry: {a[0].shape}", color='green')
+    return a
 
   def init_report(self, batch_size):
     return (self.dynamics.initial(batch_size),)
@@ -96,7 +98,8 @@ class CNNGRUAgent(JAXAgent):
     data = preprocess_data(data)
     reset = data['is_first']
     label_mask = data['label_mask'] # if the label is valid (B, T)
-    (dyn_carry,) = carry
+    (dyn_carry,) = carry # (B, dim)
+    # print(f"[CNNGRUAgent._loss] dyn_carry.shape: {dyn_carry.shape}", color='green')
 
     feat = self.encoder(data, reset, training=training, single=False) # (B, T, dim)
     dyn_carry, seq_carry = self.dynamics(nn.cast(dyn_carry), feat, reset, single=False) # (B, dim), (B, T, dim)
@@ -118,8 +121,8 @@ class CNNGRUAgent(JAXAgent):
     # Compute accuracy metrics
     for k, dist in dists.items():
       if ispupilcentroid(self.label_space[k]):
-        pred = jax.nn.tanh(dist.pred())
-        pred = unnormpupilcentroid(pred, self.label_space[k].high + 1)
+        pred_normalized = jnp.clip(dist.pred(), -1, 1)
+        pred = unnormpupilcentroid(pred_normalized, self.label_space[k].high + 1)
         label = nn.f32(data[k])
         distance = jnp.linalg.norm(pred - label, axis=-1) # (B, T)
         # for some frame, the label might not be available, so we do this
@@ -129,6 +132,22 @@ class CNNGRUAgent(JAXAgent):
         p20 = jnp.sum(F.mask(distance <= 20.0, label_mask)) / jnp.sum(label_mask) * 100
         p50 = jnp.sum(F.mask(distance <= 50.0, label_mask)) / jnp.sum(label_mask) * 100
         metrics.update({f'{k}/p5': p5, f'{k}/p10': p10, f'{k}/p15': p15, f'{k}/p20': p20, f'{k}/p50': p50})
+
+        # compute the metrics according to the original scale of the dataset, not the preprocessed one.
+        # In this case, we will use a fixed height and width of 320x320
+        unnorm2_pred = unnormpupilcentroid(pred_normalized, np.asarray([320, 320]))
+        unnorm_label = label / (self.label_space[k].high + 1) * np.asarray([320, 320])
+        distance2 = jnp.linalg.norm(unnorm2_pred - unnorm_label, axis=-1) # (B, T)
+        p5_true = jnp.mean(distance2 <= 5.0) * 100 # no label mask for now
+        p10_true = jnp.mean(distance2 <= 10.0) * 100
+        p15_true = jnp.mean(distance2 <= 15.0) * 100
+        p20_true = jnp.mean(distance2 <= 20.0) * 100
+        p50_true = jnp.mean(distance2 <= 50.0) * 100
+        metrics.update({f'{k}/p5_true': p5_true, f'{k}/p10_true': p10_true, f'{k}/p15_true': p15_true,
+                        f'{k}/p20_true': p20_true, f'{k}/p50_true': p50_true})
+
+    # compute some metrics: gflops here: has to be a scalar value
+    # metrics['gflops_of_things'] = new_number
 
     # Final loss
     metrics.update({f'loss/{k}': v.mean() for k, v in losses.items()})
@@ -248,6 +267,7 @@ class CNNGRUAgent(JAXAgent):
       lambda normal, replay: nn.functional.where(first_chunk, replay, normal),
       (carry, rhs(obs), rhs(ext_obs), rhs(stepid)),
       (rep_carry, rep_obs, rep_ext_obs, rep_stepid))
+    # print(f"[CNNGRUAgent._apply_replay_context] carry after apply: {carry[0].shape}", color='blue') # (B, dim)
     return carry, {**obs, **ext_obs}, stepid
 
   def populate_data(self, data: Dict[str, jax.Array]) -> Dict[str, jax.Array]:

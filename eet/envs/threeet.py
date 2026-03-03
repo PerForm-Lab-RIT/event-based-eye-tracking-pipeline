@@ -80,7 +80,8 @@ class ThreeETEnv(InactiveEnv):
       train_ratio (float): ratio of data to use for training (0.0 to 1.0)
     """
     if seed is None:
-      self.seed = np.random.randint(0, 1000000)
+      # self.seed = np.random.randint(0, 1000000)
+      self.seed = 42
     else:
       self.seed = seed
     self.mode = mode

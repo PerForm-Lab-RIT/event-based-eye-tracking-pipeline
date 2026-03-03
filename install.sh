@@ -1,44 +1,40 @@
+#! /bin/bash
 
-# Before running this script, you can create a miniconda environment with:
-# conda activate amin
+# Computing lib
+# pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
 
-# Install pytorch for cuda 12.6
-# pip install torch torchvision --index-url https://download.pytorch.org/whl/cu126
+# pip install 'jax[cuda12]==0.4.33'
+pip install -U jax[cuda12]
+# pip install optax==0.2.4
+pip install optax
+pip install flax --no-deps
+# pip install tensorflow-cpu tf-keras tensorflow-probability
+pip install tensorflow tf-keras tensorflow-probability
 
-# Install pytorch for cuda13. NOTE: For some machine, the gpu driver is not updated, so it's best to stay with cuda 12 for now
-# pip install torch torchvision --index-url https://download.pytorch.org/whl/cu130
+# Datasets
+pip install kaggle tensorflow-datasets
+# To download the datasets, you need to have a Kaggle account and a Kaggle API key.
 
-# install normal pytorch for cuda 12.8
-pip install torch torchvision
+# plotting
+pip install matplotlib seaborn
 
-pip install snntorch
+# Stats
+pip install pandas scikit-learn scikit-image
 
-pip install tonic
+# CV. Open cv lib that do numpy <2.0.0
+pip install opencv-python==4.11.0.86 opencv-python-headless==4.11.0.86
 
-# Intall box2d dependencies (requires special handling)
-conda install -c conda-forge swig boost-cpp -y
+# common libraries
+pip install portal colored rich ruamel.yaml==0.17.32
 
-# Get the directory where this script is located
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# Then install the requirement file
-pip install -r "$SCRIPT_DIR/requirements.txt"
+# RL lib
+pip install gymnasium
 
-# Since hugginface_hub is updated continuously (and often not aligned with transformers),
-#  we install it manually
-# This is used to download the data from huggingface using hf download
-pip install -U huggingface_hub
+# Miscellaneous setup
 
 # Install ffmpeg for rendering gifs
 conda install -c conda-forge ffmpeg=6.1.1 -y # version 7 does not work
-# Install additional video utilities package after ffmpeg
-pip install av torchcodec
 
-
-# pip install hydra-core --upgrade
-# if encounter build error because of outdated JAVA version, run
-#   `sudo apt install default-jdk` to install JAVA 11 or above
-# Note: For Python 3.13+, need to install older setuptools first and use --no-build-isolation
-pip install "setuptools<70"  # Ensure pkg_resources is available
-pip install --no-build-isolation git+https://github.com/facebookresearch/hydra.git
-# pip install git+https://github.com/rxng8/hydra.git
+# install numpy <2 (if not already)
+# pip install 'numpy<2.0.0'
 

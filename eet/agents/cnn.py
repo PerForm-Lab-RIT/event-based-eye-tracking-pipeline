@@ -69,6 +69,72 @@ class CNNAgent(JAXAgent):
     result = {k: jax.nn.tanh(v.pred()) for k, v in dist.items()}
     return carry, result, {}
 
+  def gflops(self, carry, obs):
+    # Estimate MACs for the infer forward path used in `infer`.
+    # infer does: feat = self.encoder(obs, obs['is_first'], training=False, single=True)
+    #            dist = self.head(feat, bdims=1)
+
+    total = 0
+    # try:
+      # Use encoder.macs where available. The encoder.macs expects (obs, reset, carry)
+    reset = obs.get('is_first', None)
+    enc_m = self.encoder.macs(obs, reset)
+    total += int(enc_m)
+    # except Exception:
+    #   total += 0
+    # print(f"[CNNAgent.macs] encoder macs: {enc_m}", color='blue')
+
+    # head.macs expects input and bdims; infer calls head(feat, bdims=1)
+    # try:
+    # Determine bdims from reset / data shape: infer() uses single=True (bdims=1),
+    # but loss/train passes sequences (bdims=2). Support both.
+    reset = obs.get('is_first', None)
+    if reset is None:
+      bdims = 1
+    else:
+      bdims = 1 if reset.ndim == 1 else 2
+
+    # Try to obtain a sample feature by running the encoder in the matching mode.
+    B = int(obs['is_first'].shape[0]) if 'is_first' in obs else 1
+    if bdims == 1:
+      # try:
+      sample_feat = self.encoder(obs, obs['is_first'], training=False, single=True)
+      # except Exception:
+        # sample_feat = jnp.zeros((B, 1))
+    else:
+      # bdims == 2: encoder expects reset shape (B, T)
+      # try:
+      sample_feat = self.encoder(obs, obs['is_first'], training=False, single=False)
+      # except Exception:
+      # fallback to (B, T, 1)
+      # T = int(obs['is_first'].shape[1]) if obs['is_first'].ndim == 2 else 1
+      # sample_feat = jnp.zeros((B, T, 1))
+
+    head_m = self.head.macs(sample_feat, bdims)
+    total += int(head_m)
+    # except Exception:
+    #   total += 0
+
+    # final tanh preds: negligible but count one op per output element
+    # try:
+    # estimate number of output scalars from head by checking label_space shapes
+    out_elems = 0
+    for k, space in self.label_space.items():
+      if hasattr(space, 'shape') and space.shape:
+        out_elems += int(np.prod(space.shape))
+      else:
+        out_elems += 1
+    # If bdims==2, account for time dimension
+    if 'reset' in locals() and reset is not None and getattr(reset, 'ndim', 1) == 2:
+      T = int(reset.shape[1])
+    else:
+      T = 1
+    total += int(B * T * out_elems * 4)  # approx 4 ops per tanh per example
+    # except Exception:
+    #   pass
+
+    return macs2gflops(total)
+
   def _loss(self, data, training=True):
     metrics = {}
     data = preprocess_data(data)
@@ -93,8 +159,8 @@ class CNNAgent(JAXAgent):
     # Compute accuracy metrics
     for k, dist in dists.items():
       if ispupilcentroid(self.label_space[k]):
-        pred = jax.nn.tanh(dist.pred())
-        pred = unnormpupilcentroid(pred, self.label_space[k].high + 1)
+        pred_normalized = jnp.clip(dist.pred(), -1, 1)
+        pred = unnormpupilcentroid(pred_normalized, self.label_space[k].high + 1)
         label = nn.f32(data[k])
         distance = jnp.linalg.norm(pred - label, axis=-1) # (B, T)
         # for some frame, the label might not be available, so we do this
@@ -105,6 +171,19 @@ class CNNAgent(JAXAgent):
         p50 = jnp.sum(F.mask(distance <= 50.0, label_mask)) / jnp.sum(label_mask) * 100
         metrics.update({f'{k}/p5': p5, f'{k}/p10': p10, f'{k}/p15': p15, f'{k}/p20': p20, f'{k}/p50': p50})
 
+        # compute the metrics according to the original scale of the dataset, not the preprocessed one.
+        # In this case, we will use a fixed height and width of 320x320
+        unnorm2_pred = unnormpupilcentroid(pred_normalized, np.asarray([320, 320]))
+        unnorm_label = label / (self.label_space[k].high + 1) * np.asarray([320, 320])
+        distance2 = jnp.linalg.norm(unnorm2_pred - unnorm_label, axis=-1) # (B, T)
+        p5_true = jnp.mean(distance2 <= 5.0) * 100 # no label mask for now
+        p10_true = jnp.mean(distance2 <= 10.0) * 100
+        p15_true = jnp.mean(distance2 <= 15.0) * 100
+        p20_true = jnp.mean(distance2 <= 20.0) * 100
+        p50_true = jnp.mean(distance2 <= 50.0) * 100
+        metrics.update({f'{k}/p5_true': p5_true, f'{k}/p10_true': p10_true, f'{k}/p15_true': p15_true,
+                        f'{k}/p20_true': p20_true, f'{k}/p50_true': p50_true})
+
     # Final loss
     metrics.update({f'loss/{k}': v.mean() for k, v in losses.items()})
     for k, v in losses.items():
@@ -112,6 +191,7 @@ class CNNAgent(JAXAgent):
     final_loss = sum([v for k, v in losses.items()]) # (B, T)
     sum_label_mask = nn.f32(label_mask).sum()
     final_loss = jnp.where(sum_label_mask > 0, final_loss.sum() / sum_label_mask, 0.0) # average over valid labels
+    metrics['gflops'] = self.gflops(None, data)
 
     # metrics.update(self._metrics(data, logits))
     outs = {'preds': {k: jax.nn.tanh(v.pred()) for k, v in dists.items()}}

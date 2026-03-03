@@ -153,8 +153,103 @@ class RSSM(nn.Module):
     metrics['rep_ent'] = self._dist(post).entropy().mean()
     return carry, entries, losses, feat, metrics
 
+  def macs(self, carry, embed, reset):
+    """Estimate MACs for observe/_observe forward path.
 
-class EBSSM(nn.Module):
+    This counts core, posterior/prior, logit and small elementwise ops.
+    """
+    # infer B, T from reset
+    rshape = getattr(reset, 'shape', None)
+    if rshape is None:
+      return 0
+    if len(rshape) == 2:
+      B, T = int(rshape[0]), int(rshape[1])
+    else:
+      B, T = int(rshape[0]), 1
+    bprod = B * T
+
+    total = 0
+
+    # mask op cost (cheap) approximate
+    # carry contains deter (B, deter) and stoch (B, stoch, classes)
+    deter_elems = B * self.deter
+    stoch_elems = B * self.stoch * self.classes
+    total += deter_elems + stoch_elems
+
+    # --- core ---
+    # dynin0: Linear(self.hidden) on deter
+    try:
+      lin0 = nn.Linear(self.hidden)
+      total += int(lin0.macs(jnp.zeros((bprod, self.deter))))
+    except Exception:
+      total += int(bprod * self.deter * self.hidden)
+    # norm
+    try:
+      total += int(nn.Norm(self.norm).macs(jnp.zeros((bprod, self.hidden))))
+    except Exception:
+      total += int(bprod * self.hidden * 6)
+    # dynin1: Linear(self.hidden) on stoch flat
+    try:
+      lin1 = nn.Linear(self.hidden)
+      total += int(lin1.macs(jnp.zeros((bprod, self.stoch * self.classes))))
+    except Exception:
+      total += int(bprod * (self.stoch * self.classes) * self.hidden)
+    try:
+      total += int(nn.Norm(self.norm).macs(jnp.zeros((bprod, self.hidden))))
+    except Exception:
+      total += int(bprod * self.hidden * 6)
+
+    # prepare x and group ops: we conservatively approximate the following BlockLinear layers
+    for i in range(self.dynlayers):
+      try:
+        blk = nn.BlockLinear(self.deter, self.blocks)
+        total += int(blk.macs(jnp.zeros((bprod, self.deter))))
+      except Exception:
+        total += int(bprod * self.deter * self.deter)
+      try:
+        total += int(nn.Norm(self.norm).macs(jnp.zeros((bprod, self.deter))))
+      except Exception:
+        total += int(bprod * self.deter * 6)
+
+    # dyngru BlockLinear producing 3*self.deter
+    try:
+      dyngru = nn.BlockLinear(3 * self.deter, self.blocks)
+      total += int(dyngru.macs(jnp.zeros((bprod, self.deter))))
+    except Exception:
+      total += int(bprod * self.deter * 3 * self.deter)
+
+    # gating elementwise ops (sigmoid/tanh/mul/add) per element
+    gate_elems = bprod * self.deter
+    # reset (sigmoid ~4 ops), cand (tanh ~4 ops + mul), update (sigmoid ~4 ops) + combine ~2 ops
+    total += int(gate_elems * (4 + 5 + 4 + 2))
+
+    # --- posterior/prior/logit ---
+    # posterior (obs layers)
+    x_dim = self.hidden
+    for i in range(self.obslayers):
+      try:
+        l = nn.Linear(self.hidden)
+        total += int(l.macs(jnp.zeros((bprod, x_dim))))
+      except Exception:
+        total += int(bprod * x_dim * self.hidden)
+      try:
+        total += int(nn.Norm(self.norm).macs(jnp.zeros((bprod, self.hidden))))
+      except Exception:
+        total += int(bprod * self.hidden * 6)
+      # activation
+      total += int(bprod * self.hidden * 4)
+
+    # logit linear
+    try:
+      loglin = nn.Linear(self.stoch * self.classes)
+      total += int(loglin.macs(jnp.zeros((bprod, self.hidden))))
+    except Exception:
+      total += int(bprod * self.hidden * self.stoch * self.classes)
+
+    return int(total)
+
+
+class AIS2M(nn.Module):
 
   deter: int = 64
   hidden: int = 64
@@ -326,3 +421,142 @@ class EBSSM(nn.Module):
     metrics['dyn_ent'] = self._dist(priorlogit).entropy().mean()
     metrics['rep_ent'] = self._dist(postlogit).entropy().mean()
     return carry, entries, losses, feat, metrics
+
+  def macs(self, carry, embed, reset):
+    """Estimate MACs for observe/_observe forward path for EBSSM.
+
+    This mirrors the counting in `RSSM.macs` with additional costs for
+    the alpha network and the mixing between posterior and prior samples.
+    """
+    # infer B, T from reset
+    rshape = getattr(reset, 'shape', None)
+    if rshape is None:
+      return 0
+    if len(rshape) == 2:
+      B, T = int(rshape[0]), int(rshape[1])
+    else:
+      B, T = int(rshape[0]), 1
+    bprod = B * T
+
+    total = 0
+
+    # mask op cost (cheap) approximate
+    deter_elems = B * self.deter
+    stoch_elems = B * self.stoch * self.classes
+    total += deter_elems + stoch_elems
+
+    # --- core --- (same structure as RSSM)
+    try:
+      lin0 = nn.Linear(self.hidden)
+      total += int(lin0.macs(jnp.zeros((bprod, self.deter))))
+    except Exception:
+      total += int(bprod * self.deter * self.hidden)
+    try:
+      total += int(nn.Norm(self.norm).macs(jnp.zeros((bprod, self.hidden))))
+    except Exception:
+      total += int(bprod * self.hidden * 6)
+
+    try:
+      lin1 = nn.Linear(self.hidden)
+      total += int(lin1.macs(jnp.zeros((bprod, self.stoch * self.classes))))
+    except Exception:
+      total += int(bprod * (self.stoch * self.classes) * self.hidden)
+    try:
+      total += int(nn.Norm(self.norm).macs(jnp.zeros((bprod, self.hidden))))
+    except Exception:
+      total += int(bprod * self.hidden * 6)
+
+    for i in range(self.dynlayers):
+      try:
+        blk = nn.BlockLinear(self.deter, self.blocks)
+        total += int(blk.macs(jnp.zeros((bprod, self.deter))))
+      except Exception:
+        total += int(bprod * self.deter * self.deter)
+      try:
+        total += int(nn.Norm(self.norm).macs(jnp.zeros((bprod, self.deter))))
+      except Exception:
+        total += int(bprod * self.deter * 6)
+
+    try:
+      dyngru = nn.BlockLinear(3 * self.deter, self.blocks)
+      total += int(dyngru.macs(jnp.zeros((bprod, self.deter))))
+    except Exception:
+      total += int(bprod * self.deter * 3 * self.deter)
+
+    # gating elementwise ops
+    gate_elems = bprod * self.deter
+    total += int(gate_elems * (4 + 5 + 4 + 2))
+
+    # --- posterior ---
+    x_dim = self.hidden
+    for i in range(self.obslayers):
+      try:
+        l = nn.Linear(self.hidden)
+        total += int(l.macs(jnp.zeros((bprod, x_dim))))
+      except Exception:
+        total += int(bprod * x_dim * self.hidden)
+      try:
+        total += int(nn.Norm(self.norm).macs(jnp.zeros((bprod, self.hidden))))
+      except Exception:
+        total += int(bprod * self.hidden * 6)
+      total += int(bprod * self.hidden * 4)
+
+    # posterior logit linear
+    try:
+      loglin = nn.Linear(self.stoch * self.classes)
+      total += int(loglin.macs(jnp.zeros((bprod, self.hidden))))
+    except Exception:
+      total += int(bprod * self.hidden * self.stoch * self.classes)
+
+    # --- prior ---
+    x = self.hidden
+    for i in range(self.imglayers):
+      try:
+        l = nn.Linear(self.hidden)
+        total += int(l.macs(jnp.zeros((bprod, x))))
+      except Exception:
+        total += int(bprod * x * self.hidden)
+      try:
+        total += int(nn.Norm(self.norm).macs(jnp.zeros((bprod, self.hidden))))
+      except Exception:
+        total += int(bprod * self.hidden * 6)
+      total += int(bprod * self.hidden * 4)
+
+    # prior logit linear
+    try:
+      ploglin = nn.Linear(self.stoch * self.classes)
+      total += int(ploglin.macs(jnp.zeros((bprod, self.hidden))))
+    except Exception:
+      total += int(bprod * self.hidden * self.stoch * self.classes)
+
+    # --- alpha network ---
+    # alphalayers: several hidden linears + norms + activations
+    for i in range(self.alphalayers):
+      try:
+        l = nn.Linear(self.hidden)
+        total += int(l.macs(jnp.zeros((bprod, self.hidden))))
+      except Exception:
+        total += int(bprod * self.hidden * self.hidden)
+      try:
+        total += int(nn.Norm(self.norm).macs(jnp.zeros((bprod, self.hidden))))
+      except Exception:
+        total += int(bprod * self.hidden * 6)
+      total += int(bprod * self.hidden * 4)
+
+    # final alpha linear -> scalar per example
+    try:
+      alphal = nn.Linear(1)
+      total += int(alphal.macs(jnp.zeros((bprod, self.hidden))))
+    except Exception:
+      total += int(bprod * self.hidden * 1)
+
+    # sigmoid on alpha per timestep
+    total += int(bprod * 4)
+
+    # mixing posterior/prior into combined stoch: per-element multiplications/adds
+    mix_elems = bprod * self.stoch * self.classes
+    # approx: _alpha * post + (1 - _alpha) * prior -> ~4 ops per element
+    total += int(mix_elems * 4)
+
+    return int(total)
+

@@ -18,7 +18,6 @@ from .cnnbigru import CNNBidirectionalGRUAgent
 from .cbconvlstm import CBConvLSTMAgent
 from .mamba import MambaAgent
 from .mambapupil import MambaPupilAgent
-from .custom import CustomAgent
 from .custom2 import Custom2Agent
 
 def build_agent(config: Config):
@@ -36,7 +35,6 @@ def build_agent(config: Config):
     'cbconvlstm': CBConvLSTMAgent,
     'mamba': MambaAgent,
     'mambapupil': MambaPupilAgent,
-    'custom': CustomAgent,
     'custom2': Custom2Agent,
   }[config.agent](obs_space, label_space, config=config)
 

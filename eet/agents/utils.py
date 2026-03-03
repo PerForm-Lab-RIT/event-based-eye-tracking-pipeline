@@ -24,6 +24,8 @@ unnormpupilcentroid = lambda x, h: (x + 1.0) / 2.0 * h # from [-1, 1] to [0, h]
 # unnormpupilcentroid = lambda x, h: x + h / 2.0
 isimage = lambda s: len(s.shape) == 3
 
+macs2gflops = lambda macs: ( macs / 1e9 ) * 2
+
 # def normalize_frame(frame: jax.Array, bdims: int = 1):
 #   # normalize by mean and std
 #   axes = tuple(range(bdims, frame.ndim))
@@ -151,6 +153,30 @@ def draw_cross_hair(
   return jnp.where(cross_mask, color, image)
 
 
+def eventframe_to_rgb(eventframe: jax.Array) -> jax.Array:
+  prep = jnp.float32(eventframe).sum(-1, keepdims=True) # (B, T, H, W, 1)
+  prep = jnp.repeat(prep, 3, axis=-1) # grayscale to rgb
+
+  # min max normalization
+  true_min = prep.min(axis=[-2, -3], keepdims=True) # (RB, T, 1, 1, C)
+  true_max = prep.max(axis=[-2, -3], keepdims=True) # (RB, T, 1, 1, C)
+  prep = (prep - true_min) / (true_max - true_min).clip(1e-8)
+  prep = (prep * 255).clip(0, 255).astype(jnp.uint8)
+
+  return prep
+
+def eventframe_to_rgb_np(eventframe: np.ndarray) -> np.ndarray:
+  prep = np.float32(eventframe).sum(-1, keepdims=True) # (B, T, H, W, 1)
+  prep = np.repeat(prep, 3, axis=-1) # grayscale to rgb
+
+  # min max normalization
+  true_min = prep.min(axis=(-2, -3), keepdims=True)
+  true_max = prep.max(axis=(-2, -3), keepdims=True)
+  prep = (prep - true_min) / (true_max - true_min).clip(1e-8)
+  prep = (prep * 255).clip(0, 255).astype(np.uint8)
+
+  return prep
+
 def draw_cross_hair_with_dot(
     image: jax.Array,
     cy: jax.Array, cx: jax.Array,
@@ -227,3 +253,82 @@ def draw_cross_hair_with_dot(
 
   # Draw cross hair with dot
   return jnp.where(combined_mask, color, image)
+
+
+def draw_cross_hair_with_dot_np(
+    image: jax.Array,
+    cy: jax.Array, cx: jax.Array,
+    length: int = CROSS_HAIR_LENGTH,
+    thickness: int = CROSS_HAIR_THICKNESS,
+    gap: int = 2,
+    dot_radius: int = 1,
+    color: tuple = (0, 0, 0)
+):
+  """Draw an X-shaped cross hair with a gap toward center and a dot in the middle.
+
+  Args:
+      image (jax.Array): actual image in batch in uint8 (..., H, W, C)
+      cy (jax.Array): center y. (...,)
+      cx (jax.Array): center x. (...,)
+      length (int): half-length of each line from the center
+      thickness (int, optional): thickness of the lines. Defaults to CROSS_HAIR_THICKNESS.
+      gap (int, optional): gap from center where lines don't draw. Defaults to 2.
+      dot_radius (int, optional): radius of center dot. Defaults to 1.
+      color (tuple, optional): color of the cross hair and dot. Defaults to (0, 0, 0).
+
+  Returns:
+      jax.Array: image with cross hair and center dot drawn
+  """
+  assert image.dtype == np.uint8 and image.shape[-1] == 3, (image.dtype, image.shape)
+  *bdims, H, W, C = image.shape
+  bshape = tuple(bdims)
+
+  # Create meshgrid for spatial dimensions
+  y = np.arange(H)
+  x = np.arange(W)
+  yy, xx = np.meshgrid(y, x, indexing='ij')  # (H, W)
+
+  # Expand and broadcast to match batch dimensions
+  yy = yy.reshape((1,) * len(bshape) + (H, W))
+  xx = xx.reshape((1,) * len(bshape) + (H, W))
+
+  # Reshape cy, cx to align with image dimensions
+  cy = cy.reshape(bshape + (1, 1))
+  cx = cx.reshape(bshape + (1, 1))
+
+  # Create diagonal line mask (top-left to bottom-right)
+  # Line equation: y - cy = x - cx, or |y - cy - (x - cx)| <= thickness
+  diagonal1_mask = (
+    (np.abs((yy - cy) - (xx - cx)) <= thickness // 2) &  # on diagonal line
+    (np.abs(xx - cx) <= length) &                        # within length horizontally
+    (np.abs(yy - cy) <= length) &                        # within length vertically
+    ((np.abs(xx - cx) >= gap) | (np.abs(yy - cy) >= gap))  # outside gap zone
+  )
+
+  # Create diagonal line mask (top-right to bottom-left)
+  # Line equation: y - cy = -(x - cx), or |y - cy + (x - cx)| <= thickness
+  diagonal2_mask = (
+    (np.abs((yy - cy) + (xx - cx)) <= thickness // 2) &  # on diagonal line
+    (np.abs(xx - cx) <= length) &                        # within length horizontally
+    (np.abs(yy - cy) <= length) &                        # within length vertically
+    ((np.abs(xx - cx) >= gap) | (np.abs(yy - cy) >= gap))  # outside gap zone
+  )
+
+  # Combine diagonal masks
+  cross_mask = diagonal1_mask | diagonal2_mask  # shape: (*batch_dims, H, W)
+
+  # Create center dot mask
+  dist_sq = (yy - cy) ** 2 + (xx - cx) ** 2  # shape: (*batch_dims, H, W)
+  dot_mask = dist_sq <= dot_radius ** 2  # shape: (*batch_dims, H, W)
+
+  # Combine cross hair and dot masks
+  combined_mask = cross_mask | dot_mask  # shape: (*batch_dims, H, W)
+  combined_mask = combined_mask[..., None]  # shape: (*batch_dims, H, W, 1)
+
+  # Reshape color for broadcasting
+  color = np.array(color, dtype=image.dtype)
+  color = color.reshape((1,) * len(bshape) + (1, 1, 3))
+
+  # Draw cross hair with dot
+  return np.where(combined_mask, color, image)
+

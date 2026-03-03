@@ -9,7 +9,7 @@ Description: Event representation classes
 import functools
 from typing import Dict, List, Tuple, Iterator
 import numpy as np
-from lib import print, Space
+from lib import print, Space, timer
 
 
 EVENT_DTYPE = np.dtype([
@@ -57,17 +57,18 @@ class Binary(EventTransform):
     Returns:
         numpy array of shape (H, W, 2) containing (positive, negative) event counts
     """
-    frame = np.zeros((self.height, self.width, 2), dtype=np.uint32)
-    # Support both structured and regular arrays
-    x, y = resize_positions(events['x'], events['y'], original_width, original_height, self.width, self.height)
-    p = events['p']
-    # Polarity: assume p in {0, 1}
-    # Map p to 0 (positive) and 1 (negative)
-    # p_bin = ((p < 0).astype(int) if np.any((p == -1) | (p == 1)) else p)
-    for xi, yi, pi in zip(x, y, p):
-      if 0 <= xi < self.width and 0 <= yi < self.height and pi in (0, 1):
-        frame[yi, xi, pi] += 1
-    return frame
+    with timer.section("event_processing_time"):
+      frame = np.zeros((self.height, self.width, 2), dtype=np.uint32)
+      # Support both structured and regular arrays
+      x, y = resize_positions(events['x'], events['y'], original_width, original_height, self.width, self.height)
+      p = events['p']
+      # Polarity: assume p in {0, 1}
+      # Map p to 0 (positive) and 1 (negative)
+      # p_bin = ((p < 0).astype(int) if np.any((p == -1) | (p == 1)) else p)
+      for xi, yi, pi in zip(x, y, p):
+        if 0 <= xi < self.width and 0 <= yi < self.height and pi in (0, 1):
+          frame[yi, xi, pi] += 1
+      return frame
 
 
 class BinaryRepresentation(EventTransform):
@@ -87,29 +88,30 @@ class BinaryRepresentation(EventTransform):
     return Space(dtype=np.float32, shape=(self.height, self.width, 1))
 
   def __call__(self, events: np.ndarray, original_width: int, original_height: int) -> np.ndarray:
-    if len(events) == 0:
-      return np.zeros((self.height, self.width, 1), dtype=np.float32)
+    with timer.section("event_processing_time"):
+      if len(events) == 0:
+        return np.zeros((self.height, self.width, 1), dtype=np.float32)
 
-    ts = events['t']
-    xs, ys = resize_positions(events['x'], events['y'], original_width, original_height, self.width, self.height)
-    ps = events['p'] * 2 - 1 # [0, 1] -> [-1, 1]
+      ts = events['t']
+      xs, ys = resize_positions(events['x'], events['y'], original_width, original_height, self.width, self.height)
+      ps = events['p'] * 2 - 1 # [0, 1] -> [-1, 1]
 
-    # Normalize timestamps to [0, num_bins - 1]
-    t_norms = (ts - ts.min()) / (ts.max() - ts.min() + 1e-8) * (self.microbins - 1)
-    t_bins = t_norms.astype(int)
+      # Normalize timestamps to [0, num_bins - 1]
+      t_norms = (ts - ts.min()) / (ts.max() - ts.min() + 1e-8) * (self.microbins - 1)
+      t_bins = t_norms.astype(int)
 
-    # Create a 3D array to store the voxel grid
-    binarep = np.full((self.height, self.width, self.microbins), 0.0, dtype=np.float32)
+      # Create a 3D array to store the voxel grid
+      binarep = np.full((self.height, self.width, self.microbins), 0.0, dtype=np.float32)
 
-    # Count events in each voxel
-    for i in range(len(ts)):
-      xi = xs[i]
-      yi = ys[i]
-      pi = ps[i]
-      bin_idx = t_bins[i]
-      if 0 <= xi < self.width and 0 <= yi < self.height and 0 <= bin_idx < self.microbins:
-        binarep[yi, xi, bin_idx] += pi
-    return (binarep * self.mask).sum(axis=-1, keepdims=True)
+      # Count events in each voxel
+      for i in range(len(ts)):
+        xi = xs[i]
+        yi = ys[i]
+        pi = ps[i]
+        bin_idx = t_bins[i]
+        if 0 <= xi < self.width and 0 <= yi < self.height and 0 <= bin_idx < self.microbins:
+          binarep[yi, xi, bin_idx] += pi
+      return (binarep * self.mask).sum(axis=-1, keepdims=True)
 
 
 class VoxelGrid(EventTransform):
@@ -123,29 +125,30 @@ class VoxelGrid(EventTransform):
     return Space(dtype=np.float32, shape=(self.height, self.width, self.microbins))
 
   def __call__(self, events: np.ndarray, original_width: int, original_height: int) -> np.ndarray:
-    if len(events) == 0:
-      return np.zeros((self.height, self.width, 1), dtype=np.float32)
+    with timer.section("event_processing_time"):
+      if len(events) == 0:
+        return np.zeros((self.height, self.width, 1), dtype=np.float32)
 
-    ts = events['t']
-    xs, ys = resize_positions(events['x'], events['y'], original_width, original_height, self.width, self.height)
-    ps = events['p'] * 2 - 1 # [0, 1] -> [-1, 1]
+      ts = events['t']
+      xs, ys = resize_positions(events['x'], events['y'], original_width, original_height, self.width, self.height)
+      ps = events['p'] * 2 - 1 # [0, 1] -> [-1, 1]
 
-    # Normalize timestamps to [0, num_bins - 1]
-    t_norms = (ts - ts.min()) / (ts.max() - ts.min() + 1e-8) * (self.microbins - 1)
-    t_bins = t_norms.astype(int)
+      # Normalize timestamps to [0, num_bins - 1]
+      t_norms = (ts - ts.min()) / (ts.max() - ts.min() + 1e-8) * (self.microbins - 1)
+      t_bins = t_norms.astype(int)
 
-    # Create a 3D array to store the voxel grid
-    voxel_grid = np.full((self.height, self.width, self.microbins), 0.0, dtype=np.float32)
+      # Create a 3D array to store the voxel grid
+      voxel_grid = np.full((self.height, self.width, self.microbins), 0.0, dtype=np.float32)
 
-    # Count events in each voxel
-    for i in range(len(ts)):
-      xi = xs[i]
-      yi = ys[i]
-      pi = ps[i]
-      bin_idx = t_bins[i]
-      if 0 <= xi < self.width and 0 <= yi < self.height and 0 <= bin_idx < self.microbins:
-        voxel_grid[yi, xi, bin_idx] += pi
-    return voxel_grid
+      # Count events in each voxel
+      for i in range(len(ts)):
+        xi = xs[i]
+        yi = ys[i]
+        pi = ps[i]
+        bin_idx = t_bins[i]
+        if 0 <= xi < self.width and 0 <= yi < self.height and 0 <= bin_idx < self.microbins:
+          voxel_grid[yi, xi, bin_idx] += pi
+      return voxel_grid
 
 
 class Histogram(EventTransform):
@@ -158,11 +161,12 @@ class Histogram(EventTransform):
     return Space(dtype=np.float32, shape=(self.height, self.width, 2))
 
   def __call__(self, events: np.ndarray, original_width: int, original_height: int) -> np.ndarray:
-    img = np.full((self.height, self.width, 2), 0, dtype=np.float32)
-    x, y = resize_positions(events['x'], events['y'], original_width, original_height, self.width, self.height)
-    for i, event in enumerate(events):
-      img[y[i], x[i], event["p"]] += 1.0
-    return img
+    with timer.section("event_processing_time"):
+      img = np.full((self.height, self.width, 2), 0, dtype=np.float32)
+      x, y = resize_positions(events['x'], events['y'], original_width, original_height, self.width, self.height)
+      for i, event in enumerate(events):
+        img[y[i], x[i], event["p"]] += 1.0
+      return img
 
 
 class EventFrame(EventTransform):
@@ -175,12 +179,14 @@ class EventFrame(EventTransform):
     return Space(dtype=np.float32, shape=(self.height, self.width, 1))
 
   def __call__(self, events: np.ndarray, original_width: int, original_height: int) -> np.ndarray:
-    if len(events) == 0:
-      return np.full((self.height, self.width, 1), 0.5, dtype=np.float32)
-    img = np.full((self.height, self.width, 1), 0.5, dtype=np.float32) # mid value is 128
-    x, y = resize_positions(events['x'], events['y'], original_width, original_height, self.width, self.height)
-    img[y, x, 0] = events['p']
-    return img
+    with timer.section("event_processing_time"):
+      if len(events) == 0:
+        return np.full((self.height, self.width, 1), 0, dtype=np.float32)
+      img = np.full((self.height, self.width, 1), 0, dtype=np.float32) # mid value is 128
+      x, y = resize_positions(events['x'], events['y'], original_width, original_height, self.width, self.height)
+      for i, event in enumerate(events):
+        img[y[i], x[i], 0] += 1.0 # p=1 -> +1, p=0 -> also +1
+      return img
 
 
 def build_event_transform(eventrepr: str, *args, **kwargs):

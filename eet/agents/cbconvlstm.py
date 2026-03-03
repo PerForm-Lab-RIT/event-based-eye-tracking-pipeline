@@ -74,6 +74,55 @@ class CBConvLSTMAgent(JAXAgent):
     carry = (enc_carry,)
     return carry, result, {}
 
+  def gflops(self, carry, obs):
+    # Estimate MACs for the infer forward path used in `infer`.
+    # infer does: feat, enc_carry = self.encoder(obs, obs['is_first'], enc_carry, training=False, single=True)
+    #            dist = self.head(feat, bdims=1)
+
+    total = 0
+    # Use encoder.macs where available. The encoder.macs expects (obs, reset, carry)
+    reset = obs.get('is_first', None)
+    (enc_carry,) = carry
+    enc_m = self.encoder.macs(obs, reset, enc_carry)
+    total += int(enc_m)
+
+    # head.macs expects input and bdims; infer calls head(feat, bdims=1)
+    # Determine bdims from reset / data shape: infer() uses single=True (bdims=1),
+    # but loss/train passes sequences (bdims=2). Support both.
+    reset = obs.get('is_first', None)
+    if reset is None:
+      bdims = 1
+    else:
+      bdims = 1 if reset.ndim == 1 else 2
+
+    # Try to obtain a sample feature by running the encoder in the matching mode.
+    B = int(obs['is_first'].shape[0]) if 'is_first' in obs else 1
+    if bdims == 1:
+      sample_feat, _ = self.encoder(obs, obs['is_first'], enc_carry, training=False, single=True)
+    else:
+      # bdims == 2: encoder expects reset shape (B, T)
+      sample_feat, _ = self.encoder(obs, obs['is_first'], enc_carry, training=False, single=False)
+
+    head_m = self.head.macs(sample_feat, bdims)
+    total += int(head_m)
+
+    # final tanh preds: negligible but count one op per output element
+    # estimate number of output scalars from head by checking label_space shapes
+    out_elems = 0
+    for k, space in self.label_space.items():
+      if hasattr(space, 'shape') and space.shape:
+        out_elems += int(np.prod(space.shape))
+      else:
+        out_elems += 1
+    # If bdims==2, account for time dimension
+    if 'reset' in locals() and reset is not None and getattr(reset, 'ndim', 1) == 2:
+      T = int(reset.shape[1])
+    else:
+      T = 1
+    total += int(B * T * out_elems * 4)  # approx 4 ops per tanh per example
+
+    return macs2gflops(total)
+
   def _loss(self, carry, data, training=True):
     metrics = {}
     data = preprocess_data(data)
@@ -100,8 +149,8 @@ class CBConvLSTMAgent(JAXAgent):
     # Compute accuracy metrics
     for k, dist in dists.items():
       if ispupilcentroid(self.label_space[k]):
-        pred = jax.nn.tanh(dist.pred())
-        pred = unnormpupilcentroid(pred, self.label_space[k].high + 1)
+        pred_normalized = jnp.clip(dist.pred(), -1, 1)
+        pred = unnormpupilcentroid(pred_normalized, self.label_space[k].high + 1)
         label = nn.f32(data[k])
         distance = jnp.linalg.norm(pred - label, axis=-1) # (B, T)
         # for some frame, the label might not be available, so we do this
@@ -112,6 +161,20 @@ class CBConvLSTMAgent(JAXAgent):
         p50 = jnp.sum(F.mask(distance <= 50.0, label_mask)) / jnp.sum(label_mask) * 100
         metrics.update({f'{k}/p5': p5, f'{k}/p10': p10, f'{k}/p15': p15, f'{k}/p20': p20, f'{k}/p50': p50})
 
+        # compute the metrics according to the original scale of the dataset, not the preprocessed one.
+        # In this case, we will use a fixed height and width of 320x320
+        unnorm2_pred = unnormpupilcentroid(pred_normalized, np.asarray([320, 320]))
+        unnorm_label = label / (self.label_space[k].high + 1) * np.asarray([320, 320])
+        distance2 = jnp.linalg.norm(unnorm2_pred - unnorm_label, axis=-1) # (B, T)
+        p5_true = jnp.mean(distance2 <= 5.0) * 100 # no label mask for now
+        p10_true = jnp.mean(distance2 <= 10.0) * 100
+        p15_true = jnp.mean(distance2 <= 15.0) * 100
+        p20_true = jnp.mean(distance2 <= 20.0) * 100
+        p50_true = jnp.mean(distance2 <= 50.0) * 100
+        metrics.update({f'{k}/p5_true': p5_true, f'{k}/p10_true': p10_true, f'{k}/p15_true': p15_true,
+                        f'{k}/p20_true': p20_true, f'{k}/p50_true': p50_true})
+
+
     # Final loss
     metrics.update({f'loss/{k}': v.mean() for k, v in losses.items()})
     for k, v in losses.items():
@@ -119,6 +182,7 @@ class CBConvLSTMAgent(JAXAgent):
     final_loss = sum([v for k, v in losses.items()]) # (B, T)
     sum_label_mask = nn.f32(label_mask).sum()
     final_loss = jnp.where(sum_label_mask > 0, final_loss.sum() / sum_label_mask, 0.0) # average over valid labels
+    metrics['gflops'] = self.gflops(carry, data)
 
     # metrics.update(self._metrics(data, logits))
     outs = {'preds': {k: jax.nn.tanh(v.pred()) for k, v in dists.items()}}

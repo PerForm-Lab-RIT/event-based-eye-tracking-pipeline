@@ -153,3 +153,124 @@ class Decoder(nn.Module):
         out = nn.distributions.Agg(nn.distributions.MSE(out), 3, jnp.sum)
         recons[k] = out
     return recons
+
+  def macs(self, feat, reset):
+    """Estimate MACs for the decoder given latent feat and reset.
+
+    Mirrors the forward pass: MLP/BlockLinear/Linear + conv transpose stack.
+    """
+    total = 0
+    rshape = getattr(reset, 'shape', None)
+    if rshape is None:
+      return 0
+    if len(rshape) == 2:
+      B, T = int(rshape[0]), int(rshape[1])
+    else:
+      B, T = int(rshape[0]), 1
+
+    # Prepare inp shapes similar to forward
+    bprod = B * T
+
+    # Vector outputs (MLP + DictHead)
+    if self.veckeys:
+      # MLP: use nn.MLP.macs
+      try:
+        mlp_layer = nn.MLP(self.layers, self.units)
+        dummy_inp = jnp.zeros((bprod, feat['deter'].shape[-1] + feat['stoch'].shape[-1]))
+        total += int(mlp_layer.macs(dummy_inp))
+      except Exception:
+        total += int(bprod * (feat['deter'].shape[-1] + feat['stoch'].shape[-1]) * self.units * self.layers)
+      # DictHead and output heads are harder to account exactly; approximate as linear from mlp output
+      try:
+        dicthead = nn.DictHead({k: self.obs_space[k] for k in self.veckeys}, {})
+        dummy_x = jnp.zeros((bprod, self.units))
+        total += int(dicthead.macs(dummy_x))
+      except Exception:
+        total += int(bprod * self.units * sum(self.obs_space[k].shape[-1] for k in self.veckeys))
+
+    # Image outputs
+    if self.imgkeys:
+      factor = 2 ** (len(self.depths) - int(bool(self.outer)))
+      minres = [int(x // factor) for x in self.imgres]
+      shape = (*minres, self.depths[-1])
+      # BlockLinear / Linear space projection
+      if self.bspace:
+        u, g = math.prod(shape), self.bspace
+        # sp0: BlockLinear
+        try:
+          bl = nn.BlockLinear(u, g)
+          dummy_x0 = jnp.zeros((bprod, feat['deter'].shape[-1]))
+          total += int(bl.macs(dummy_x0))
+        except Exception:
+          total += int(bprod * feat['deter'].shape[-1] * u)
+        # sp1 and sp2: two linears
+        try:
+          l1 = nn.Linear(2 * self.units)
+          dummy_x1 = jnp.zeros((bprod, feat['stoch'].shape[-1]))
+          total += int(l1.macs(dummy_x1))
+        except Exception:
+          total += int(bprod * feat['stoch'].shape[-1] * 2 * self.units)
+        try:
+          l2 = nn.Linear(shape)
+          dummy_x1b = jnp.zeros((bprod, 2 * self.units))
+          total += int(l2.macs(dummy_x1b))
+        except Exception:
+          total += int(bprod * 2 * self.units * math.prod(shape))
+        # spnorm
+        try:
+          total += int(nn.Norm(self.norm).macs(jnp.zeros((bprod, math.prod(shape)))))
+        except Exception:
+          total += int(bprod * math.prod(shape) * 6)
+      else:
+        # space linear
+        try:
+          ls = nn.Linear(shape)
+          dummy_inp = jnp.zeros((bprod, feat['deter'].shape[-1] + feat['stoch'].shape[-1]))
+          total += int(ls.macs(dummy_inp))
+        except Exception:
+          total += int(bprod * (feat['deter'].shape[-1] + feat['stoch'].shape[-1]) * math.prod(shape))
+        try:
+          total += int(nn.Norm(self.norm).macs(jnp.zeros((bprod, math.prod(shape)))))
+        except Exception:
+          total += int(bprod * math.prod(shape) * 6)
+
+      # Now the upsampling conv stack (reversed depths[:-1])
+      cur_H, cur_W = minres[0], minres[1]
+      for i, depth in reversed(list(enumerate(self.depths[:-1]))):
+        out_ch = int(depth)
+        if self.strided:
+          stride = 2
+          try:
+            conv = nn.Conv2D(out_ch, self.kernel, stride)
+            dummy_x = jnp.zeros((bprod, cur_H, cur_W, int(self.depths[-1]) if i == len(self.depths[:-1]) - 1 else out_ch))
+            total += int(conv.macs(dummy_x))
+          except Exception:
+            total += int(bprod * max(1, cur_H * 2) * max(1, cur_W * 2) * out_ch * self.kernel * self.kernel * out_ch)
+          cur_H, cur_W = max(1, cur_H * 2), max(1, cur_W * 2)
+        else:
+          # upsample by repeat
+          try:
+            conv = nn.Conv2D(out_ch, self.kernel)
+            dummy_x = jnp.zeros((bprod, cur_H * 2, cur_W * 2, int(self.depths[-1]) if i == len(self.depths[:-1]) - 1 else out_ch))
+            total += int(conv.macs(dummy_x))
+          except Exception:
+            total += int(bprod * max(1, cur_H * 2) * max(1, cur_W * 2) * out_ch * self.kernel * self.kernel * out_ch)
+          cur_H, cur_W = max(1, cur_H * 2), max(1, cur_W * 2)
+        # norm + act
+        total += int(bprod * cur_H * cur_W * out_ch * 6)
+
+      # final imgout conv
+      try:
+        out_ch = int(self.imgdep)
+        if self.outer:
+          convf = nn.Conv2D(out_ch, self.kernel)
+        elif self.strided:
+          convf = nn.Conv2D(out_ch, self.kernel, 2)
+        else:
+          convf = nn.Conv2D(out_ch, self.kernel)
+        dummy_xf = jnp.zeros((bprod, cur_H, cur_W, int(self.depths[-1])))
+        total += int(convf.macs(dummy_xf))
+      except Exception:
+        total += int(bprod * cur_H * cur_W * int(self.depths[-1]) * self.kernel * self.kernel * int(self.imgdep))
+
+    return int(total)
