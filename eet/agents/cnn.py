@@ -161,9 +161,9 @@ class CNNAgent(JAXAgent):
     metrics['latency_ms_per_frame'] = float(total_ms / (B * T))
 
     # Mobina [gflops/gmacs]: 
-    gflops_val = float(self.gflops(None, data))
-    metrics['gflops'] = gflops_val
-    metrics['gmacs'] = float(gflops_val / 2.0)
+    # gflops_val = float(self.gflops(None, data))
+    # metrics['gflops'] = gflops_val
+    # metrics['gmacs'] = float(gflops_val / 2.0)
 
     # Mobina [params_m]: ninjax modules:
     # Parameters live in the global ninjax Context dict, keyed by path strings

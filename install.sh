@@ -4,9 +4,8 @@
 # pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
 
 # pip install 'jax[cuda12]==0.4.33'
-pip install -U jax[cuda12]
+pip install -U jax[cuda12]==0.4.33 chex optax
 # pip install optax==0.2.4
-pip install optax
 pip install flax --no-deps
 # pip install tensorflow-cpu tf-keras tensorflow-probability
 pip install tensorflow tf-keras tensorflow-probability
@@ -38,4 +37,4 @@ conda install -c conda-forge ffmpeg=6.1.1 -y # version 7 does not work
 # install numpy <2 (if not already)
 # pip install 'numpy<2.0.0'
 
-pip install chex
+
