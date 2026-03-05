@@ -38,3 +38,4 @@ conda install -c conda-forge ffmpeg=6.1.1 -y # version 7 does not work
 # install numpy <2 (if not already)
 # pip install 'numpy<2.0.0'
 
+pip install chex
