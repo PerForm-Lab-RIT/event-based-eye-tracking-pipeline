@@ -8,8 +8,9 @@ import os
 import json
 import subprocess
 
-LOG_ROOT_DIR = pathlib.Path("~/tsxai/ai-pipeline/experimental/eet/logs_official/").expanduser()
+# LOG_ROOT_DIR = pathlib.Path("~/tsxai/ai-pipeline/experimental/eet/logs_official/").expanduser()
 # LOG_ROOT_DIR = pathlib.Path("/shared/rc/eyeseg/eet/logs/")
+LOG_ROOT_DIR = pathlib.Path("logs").expanduser()
 os.makedirs(LOG_ROOT_DIR, exist_ok=True)
 
 
@@ -34,11 +35,11 @@ ENV_LIST = [
 agent_list = [
   # 'custom2',
   'cnn',
-  'cnngru',
-  'cnnbigru',
-  'cbconvlstm',
-  'mamba',
-  'mambapupil'
+  # 'cnngru',
+  # 'cnnbigru',
+  # 'cbconvlstm',
+  # 'mamba',
+  # 'mambapupil'
 ]
 
 IMAGE_SIZES = [
@@ -71,16 +72,16 @@ USE_REPLAY_CONTEXT = {
 
 
 STEP_MAPPING = {
-  '3et': 100_000,
-  'eveye': 100_000,
+  '3et': 500_000,
+  'eveye': 500_000,
 }
 
 
 EVENT_REPRS = [
-  # 'binary',
+  'binary',
   'binarep',
   'histogram',
-  # 'voxelgrid',
+  'voxelgrid',
   'eventframe'
 ]
 
@@ -112,8 +113,8 @@ def compose_executables(agent: str, env: str, image_size: str,
   main_expdir.mkdir(exist_ok=True)
 
   # NOTE: comment this out if running normally
-  if not (main_expdir / "checkpoint.ckpt").exists():
-    return None, None
+  # if not (main_expdir / "checkpoint.ckpt").exists():
+  #   return None, None
 
   # Main argument building
   kwargs_str = ""
@@ -149,7 +150,7 @@ def compose_executables(agent: str, env: str, image_size: str,
   # NOTE: Currently, the train kwargs are currently being commented out
   train_kwargs_str = kwargs_str
   # train_kwargs_str += f"--logger.outputs jsonl " # don't log tensorboard, it blows up the storage. Tensorbord file is large.
-  # output += INITIAL_TRAIN_SCRIPT + train_kwargs_str + "\n"
+  output += INITIAL_TRAIN_SCRIPT + train_kwargs_str + "\n"
 
   # Build evaluation script
   output += INITIAL_EVAL_SCRIPT + kwargs_str + " --run.log_every=5 " + "\n\n"
@@ -168,7 +169,7 @@ def compose_executables(agent: str, env: str, image_size: str,
 # 0-> 9: RC
 # 10 -> 19: Personal
 # 20 -> 29: PL4
-for trial in range(10, 14):
+for trial in range(0, 1):
   for image_size in IMAGE_SIZES:
     for params in PARAM_LIST:
       for env in ENV_LIST:
@@ -177,6 +178,7 @@ for trial in range(10, 14):
             # Compose the bash script
             # bashstr, expname = compose_executables(agent, env, image_size, params, trial, event_repr)
             bashstr, expname = compose_executables(agent, env, image_size, params, trial)
+            print(f"get here, {bashstr}")
             if bashstr is not None:
               print(bashstr)
               # Write the command to a file and submit a job

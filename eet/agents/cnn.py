@@ -15,6 +15,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import re
+import time
 
 from lib.common import Space, print
 from lib.agent.inactive import JAXAgent
@@ -141,8 +142,40 @@ class CNNAgent(JAXAgent):
     reset = data['is_first']
     label_mask = data['label_mask'] # if the label is valid (B, T)
 
+    #Mobina: B and T need to be defined before they are used in metrics
+    B, T = reset.shape
+
+    # Mobina: timing start
+    start_time = time.time()
+
     feat = self.encoder(data, reset, training=training, single=False) # (B, dim)
     dists = self.head(feat, bdims=2)
+
+    # Mobina-latency: jax.block_until_ready() forces JAX to finish
+    # all async computation before we stop the timer. 
+    #jax.block_until_ready(feat)
+
+    # Mobina: timing end
+    end_time = time.time()
+    total_ms = (end_time - start_time) * 1000  # milliseconds
+    metrics['latency_ms_per_frame'] = float(total_ms / (B * T))
+
+    # Mobina [gflops/gmacs]: 
+    gflops_val = float(self.gflops(None, data))
+    metrics['gflops'] = gflops_val
+    metrics['gmacs'] = float(gflops_val / 2.0)
+
+    # Mobina [params_m]: ninjax modules:
+    # Parameters live in the global ninjax Context dict, keyed by path strings
+    # like "enc/cnn0/kernel". The correct ninjax API to read them is .values,
+    # which is a property defined on ninjax.Module that filters the global context
+    # by this module's path prefix and returns a flat dict of {name: array}.
+    enc_params  = jax.tree_util.tree_leaves(self.encoder.values)   
+    head_params = jax.tree_util.tree_leaves(self.head.values)      
+    all_params  = enc_params + head_params
+    total_params = int(sum(np.prod(p.shape) for p in all_params if hasattr(p, 'shape')))
+    metrics['params_m'] = float(total_params / 1e6)  # total params in millions
+
     losses = {}
     for key, dist in dists.items():
       space, value = self.label_space[key], data[key]
@@ -152,7 +185,6 @@ class CNNAgent(JAXAgent):
       _loss = ((prediction - nn.sg(target))**2).sum(-1) # (B, T) # MSE Loss
       losses[key] = F.mask(_loss, label_mask) # (B, T) x (B, T)
     # Assert shape
-    B, T = reset.shape
     shapes = {k: v.shape for k, v in losses.items()}
     assert all(x == (B, T) for x in shapes.values()), ((B, T), shapes)
 
@@ -190,10 +222,8 @@ class CNNAgent(JAXAgent):
       assert v.shape == (B, T), (k, v.shape, (B, T))
     final_loss = sum([v for k, v in losses.items()]) # (B, T)
     sum_label_mask = nn.f32(label_mask).sum()
-    final_loss = jnp.where(sum_label_mask > 0, final_loss.sum() / sum_label_mask, 0.0) # average over valid labels
-    metrics['gflops'] = self.gflops(None, data)
+    final_loss = jnp.where(sum_label_mask > 0, final_loss.sum() / sum_label_mask, 0.0)
 
-    # metrics.update(self._metrics(data, logits))
     outs = {'preds': {k: jax.nn.tanh(v.pred()) for k, v in dists.items()}}
     return final_loss, (outs, metrics)
 

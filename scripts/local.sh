@@ -1,3 +1,3 @@
 # source /home/vn1747/.conda/etc/profile.d/conda.sh
-conda activate eet
+# conda activate eet
 python scripts/local.py
