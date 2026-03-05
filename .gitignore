@@ -3,3 +3,6 @@ data/*
 **/__pycache__
 **/*.pyc
 logs
+.DS_Store
+.vscode
+.settings
