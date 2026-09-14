@@ -1,0 +1,21 @@
+defaults:
+  - _base_
+
+aissm:
+  encoder: {kernels: [7, 5, 5], channels: [32, 64, 128]}
+  # encoder: {depth: 16, kernel_size: 5, mults: [2, 2, 3, 3]}
+  dynamic:
+    stoch: 8
+    deter: 200
+    hidden: 128
+    discrete: 16
+    img_layers: 1
+    obs_layers: 1
+    dyn_layers: 1
+    alphalayers: 1
+    blocks: 8
+  mlp:
+    units: 256
+    layers: 3
+  mamba: {d_model: 256, d_inner: 256, d_conv: 256, dt_rank: 8, d_state: 256}
+  head: {units: 256, dropout: 0.5}

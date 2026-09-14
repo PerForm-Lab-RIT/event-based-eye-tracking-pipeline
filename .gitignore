@@ -1,0 +1,9 @@
+**__pycache__
+data/*
+!data/.gitkeep
+*.lock
+/logs*
+resources
+outputs
+**.vscode
+/experimental

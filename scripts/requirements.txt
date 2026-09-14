@@ -1,0 +1,23 @@
+torch==2.8.0
+torchvision==0.23.0
+tensordict==0.9.1
+ruamel.yaml==0.17.4
+moviepy==1.0.3
+einops
+protobuf==3.20.0
+opencv-python==4.7.0.72 # this compatible with numpy<2.0
+opencv-python-headless==4.7.0.72 # this compatible with numpy<2.0
+numpy==1.26.0
+hydra-core==1.3.2
+pre-commit==4.3.0
+setuptools<70 # downgrade for tensorboard
+tensorboard==2.17.1
+snntorch
+tonic
+av
+torchcodec
+transformers
+colored
+albumentations==1.3.1 # this compatible with opencv-python
+matplotlib
+calflops

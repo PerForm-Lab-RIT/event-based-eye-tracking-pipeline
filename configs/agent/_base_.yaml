@@ -1,0 +1,56 @@
+
+
+name: cnn # name of the agent to choose from
+
+compile: False
+device: ${device}
+# number of frames to do rnn warmup for (if using an rnn-based agent) in the batch length dimension, must be smaller than the batch length
+context_length: 0
+batch_length: ${batch_length}
+batch_size: ${batch_size}
+
+aissm:
+  # encoder: {act: ReLU, depth: 16, kernel_size: 5, mults: [2, 3 ,4, 4], norm: True}
+  encoder: {kernels: [7, 5, 5], channels: [32, 64, 128], temporal_kernel: 3, dropout: 0.5, pool_size: 4}
+  dynamic:
+    stoch: 32
+    deter: 2048 # 1536
+    hidden: 256
+    discrete: 16
+    img_layers: 2
+    obs_layers: 1
+    dyn_layers: 1
+    alphalayers: 1
+    blocks: 8
+    act: ReLU # SiLU
+    norm: True
+    unimix_ratio: 0.01
+    device: ${device}
+    free_nats: 1.0
+  mlp: {act: ReLU, symlog_inputs: False, units: 256, layers: 3}
+  mamba: {d_model: 256, d_inner: 256, bias: True, conv_bias: True, d_conv: 256, dt_rank: 8, d_state: 256}
+  dyn_scale: 1.0
+  rep_scale: 0.1
+  head: {units: 128, dropout: 0.2}
+  confidence:
+    roi_size: [70, 40] # Width, Height of the region of interest around the pupil center
+    event_threshold: 0.0 # Threshold for significant events in RAW data
+    # default_alpha: 0.5 # Default alpha for frames with invalid pupil labels
+    event_coverage_ratio_threshold: 0.1 # Minimum coverage ratio to consider signal valid
+    weights: {quality: 0.001, coverage: 0.999} # Weights for combining event density and coverage ratio
+
+# optimizer config
+opt:
+  optimizer: laprop # adamw, laprop
+  lr: 1e-4
+  agc: 0.3
+  pmin: 1e-3
+  weight_decay: 0
+  beta1: 0.9
+  beta2: 0.999
+  eps: 1e-20
+  clip: 0.0
+  warmup: 1000
+
+
+

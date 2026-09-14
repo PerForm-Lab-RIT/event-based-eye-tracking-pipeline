@@ -1,0 +1,47 @@
+defaults:
+  - _self_
+
+mix_ratio: 1.0
+sequence_stride: 16
+batch_length: ${batch_length}
+num_segmentation_classes: 4 # background, iris, pupil, sclera
+
+processor: general
+processor_kwargs:
+  general:
+    width: 160
+    height: 120
+    event_repr: binarep
+    chw: True
+    aug_flip_x_prob: 0.2
+    aug_flip_y_prob: 0.2
+    aug_rotate_prob: 0.2
+    aug_rotate_max_deg: 15
+  rgb:
+    width: 346
+    height: 260
+    chw: True
+    normalize: True
+    augment: False
+    n_input_channels: 1
+    # n_classes: ${data.num_segmentation_classes}
+
+# dataloader config
+num_workers: 2
+prefetch_factor: 2
+persistent_workers: True
+
+# Training datasets
+datasets: # The datasets that we are using to train
+  - threeet
+
+# Specific dataset configs
+threeet:
+  dataset_paths:
+    - data/event-based-eye-tracking-ais2024
+  # event_transform: eventframe
+  # image_size: [640, 480]
+  seed: 42
+  val_ratio: 0.2
+  mix_ratio: 1.0
+  temporal: True

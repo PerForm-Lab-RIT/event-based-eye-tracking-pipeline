@@ -1,0 +1,40 @@
+defaults:
+  - data: _base_
+  - agent: size3M
+  - override hydra/job_logging: disabled
+  - _self_
+
+logroot: logs # /shared/rc/ev-eyes/event-based-eye-tracking-pipeline-pytorch/logs
+expname: ${now:%Y-%m-%d}/${now:%H-%M-%S} # something
+logdir: ${logroot}/${expname}
+
+seed: 42
+device: 'cuda:0'
+
+hydra:
+  run:
+    dir: ${logdir}
+
+batch_size: 8
+batch_length: 32
+
+trainer:
+  max_epochs: 300 # epoch_based training
+  from_pretrained: 0 # fill the path here to load the pretrained model, e.g. 'logs/2024-06-01/12-00-00/checkpoint.pt'
+  eval_every: 5 # 5 epochs
+  batch_size: ${batch_size}
+  batch_length: ${batch_length}
+  log_every: 20 # 20 seconds
+  logdir: ${logdir}
+
+
+# Logger config
+logger:
+  outputs: [jsonl, tensorboard]
+  filter: 'score|length|fps|ratio|train/loss/|train/rand/'
+  timer: True
+  fps: 15
+  user: ''
+
+
+
