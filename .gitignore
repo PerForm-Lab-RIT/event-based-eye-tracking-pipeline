@@ -1,9 +1,0 @@
-data/*
-!data/.gitkeep
-**/__pycache__
-**/*.pyc
-logs
-.DS_Store
-.vscode
-.settings
-**command.lock
